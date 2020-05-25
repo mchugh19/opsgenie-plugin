@@ -11,6 +11,8 @@ import hudson.tasks.test.AbstractTestResultAction;
 import hudson.tasks.test.TestResult;
 import jenkins.model.Jenkins;
 import jenkins.model.JenkinsLocationConfiguration;
+import net.sf.json.JSONObject;
+
 import org.apache.commons.lang.StringUtils;
 import org.apache.http.HttpHost;
 import org.apache.http.HttpResponse;
@@ -39,19 +41,19 @@ import java.util.regex.Pattern;
  */
 
 public class OpsGenieNotificationService {
-    private final static String INTEGRATION_PATH = "/v1/json/jenkins";
+    private final static String INTEGRATION_PATH = "/v2/alerts";
 
     private final org.slf4j.Logger logger = LoggerFactory.getLogger(OpsGenieNotificationService.class);
 
-    private Run<?, ?> build;
-    private Job<?, ?> project;
-    private AlertProperties alertProperties;
-    private PrintStream consoleOutputLogger;
-    private Map<String, Object> requestPayload;
-    private ObjectMapper mapper;
-    private OpsGenieNotificationRequest request;
+    private final Run<?, ?> build;
+    private final Job<?, ?> project;
+    private final AlertProperties alertProperties;
+    private final PrintStream consoleOutputLogger;
+    private final Map<String, Object> requestPayload;
+    private final ObjectMapper mapper;
+    private final OpsGenieNotificationRequest request;
 
-    public OpsGenieNotificationService(OpsGenieNotificationRequest request) {
+    public OpsGenieNotificationService(final OpsGenieNotificationRequest request) {
         build = request.getBuild();
         project = build.getParent();
 
@@ -64,9 +66,9 @@ public class OpsGenieNotificationService {
         consoleOutputLogger = request.getListener().getLogger();
     }
 
-    private boolean checkResponse(String res) {
+    private boolean checkResponse(final String res) {
         try {
-            ResponseFromOpsGenie response = mapper.readValue(res, ResponseFromOpsGenie.class);
+            final ResponseFromOpsGenie response = mapper.readValue(res, ResponseFromOpsGenie.class);
             if (StringUtils.isEmpty(response.error)) {
                 consoleOutputLogger.println("Sending job data to OpsGenie is done");
                 return true;
@@ -75,20 +77,19 @@ public class OpsGenieNotificationService {
                 logger.error("Response status is failed");
                 return false;
             }
-        } catch (Exception e) {
+        } catch (final Exception e) {
             e.printStackTrace(consoleOutputLogger);
             logger.error("Exception while checking response" + e.getMessage());
         }
         return !res.isEmpty();
     }
 
-    private String sendWebhookToOpsGenie(String data) {
+    private String sendWebhookToOpsGenie(final String data) {
         try {
-            String apiUrl = this.request.getApiUrl();
-            String apiKey = this.request.getApiKey();
+            final String apiUrl = this.request.getApiUrl();
+            final String apiKey = this.request.getApiKey();
 
-
-            URI inputURI = new URI(apiUrl);
+            final URI inputURI = new URI(apiUrl);
             String scheme = "https";
             String host = apiUrl;
             if (inputURI.isAbsolute()) {
@@ -96,27 +97,24 @@ public class OpsGenieNotificationService {
                 host = inputURI.getHost();
             }
 
-            URI uri = new URIBuilder()
-                    .setScheme(scheme)
-                    .setHost(host)
-                    .setPath(INTEGRATION_PATH)
-                    .addParameter("apiKey", apiKey)
-                    .build();
+            final URI uri = new URIBuilder().setScheme(scheme).setHost(host).setPath(INTEGRATION_PATH)
+                    .addParameter("apiKey", apiKey).build();
 
             HttpClient client;
 
-            HttpPost post = new HttpPost(uri);
-            StringEntity params = new StringEntity(data);
-            post.addHeader("content-type", "application/x-www-form-urlencoded");
+            final HttpPost post = new HttpPost(uri);
+            final JSONObject JSO = JSONObject.fromObject(data);
+            final StringEntity params = new StringEntity(JSO.toString());
             post.setEntity(params);
+            post.addHeader("Content-Type", "application/json");
 
             if (Jenkins.getInstance() != null && Jenkins.getInstance().proxy != null) {
                 // A proxy is configured, so we will use it for this request as well.
-                ProxyConfiguration proxy = Jenkins.getInstance().proxy;
+                final ProxyConfiguration proxy = Jenkins.getInstance().proxy;
 
                 // Check if the host of opsgenie is excluded from the proxy.
                 Boolean isHostExcludedFromProxy = false;
-                for (Pattern pattern: proxy.getNoProxyHostPatterns()) {
+                for (final Pattern pattern : proxy.getNoProxyHostPatterns()) {
                     if (pattern.matcher(host).matches()) {
                         isHostExcludedFromProxy = true;
                     }
@@ -126,17 +124,16 @@ public class OpsGenieNotificationService {
                     // Host is not excluded from proxy.
                     if (proxy.getUserName() != null && proxy.getPassword() != null) {
                         // Authentication for proxy is configured.
-                        CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
-                        credentialsProvider.setCredentials(new AuthScope(proxy.name, proxy.port), new UsernamePasswordCredentials(proxy.getUserName(), proxy.getPassword()));
+                        final CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
+                        credentialsProvider.setCredentials(new AuthScope(proxy.name, proxy.port),
+                                new UsernamePasswordCredentials(proxy.getUserName(), proxy.getPassword()));
                         client = HttpClientBuilder.create().setDefaultCredentialsProvider(credentialsProvider).build();
                     } else {
                         client = HttpClientBuilder.create().build();
                     }
 
-                    HttpHost proxyHost = new HttpHost(proxy.name, proxy.port);
-                    RequestConfig config = RequestConfig.custom()
-                            .setProxy(proxyHost)
-                            .build();
+                    final HttpHost proxyHost = new HttpHost(proxy.name, proxy.port);
+                    final RequestConfig config = RequestConfig.custom().setProxy(proxyHost).build();
 
                     post.setConfig(config);
                 } else {
@@ -149,10 +146,10 @@ public class OpsGenieNotificationService {
             }
 
             consoleOutputLogger.println("Sending job data to OpsGenie...");
-            HttpResponse response = client.execute(post);
+            final HttpResponse response = client.execute(post);
 
             return EntityUtils.toString(response.getEntity());
-        } catch (Exception e) {
+        } catch (final Exception e) {
             e.printStackTrace(consoleOutputLogger);
             logger.error("Exception while sending webhook: " + e.getMessage());
         }
@@ -165,43 +162,39 @@ public class OpsGenieNotificationService {
 
         requestPayload.put("isPreBuild", "true");
 
-        if(alertProperties.getBuildStartPriority() != null) {
+        if (alertProperties.getBuildStartPriority() != null) {
             requestPayload.put("priority", alertProperties.getBuildStartPriority().getValue());
         }
 
-        String payload = "";
+        JSONObject payload = new JSONObject();
         try {
-            payload = this.mapper.writerWithDefaultPrettyPrinter().writeValueAsString(requestPayload);
-        } catch (Exception e) {
+            payload = JSONObject.fromObject(requestPayload);
+        } catch (final Exception e) {
             e.printStackTrace(consoleOutputLogger);
             logger.error("Exception while serializing pre request:" + e.getMessage());
         }
-        String response = sendWebhookToOpsGenie(payload);
+        final String response = sendWebhookToOpsGenie(payload.toString());
 
         return checkResponse(response);
     }
 
-    private String formatCommitList(ChangeLogSet<? extends ChangeLogSet.Entry> changeLogSet) {
-        StringBuilder commitListBuilder = new StringBuilder();
+    private String formatCommitList(final ChangeLogSet<? extends ChangeLogSet.Entry> changeLogSet) {
+        final StringBuilder commitListBuilder = new StringBuilder();
         if (changeLogSet.isEmptySet()) {
             commitListBuilder.append("No changes.\n\n");
         }
 
-        for (ChangeLogSet.Entry entry : changeLogSet) {
-            commitListBuilder
-                    .append(entry.getMsg())
-                    .append(" - <strong>")
-                    .append(entry.getAuthor().getDisplayName())
+        for (final ChangeLogSet.Entry entry : changeLogSet) {
+            commitListBuilder.append(entry.getMsg()).append(" - <strong>").append(entry.getAuthor().getDisplayName())
                     .append("</strong><br>\n");
         }
         return commitListBuilder.toString();
     }
 
-    private String formatFailedTests(List<? extends TestResult> failedTests) {
-        StringBuilder testResultBuilder = new StringBuilder();
-        for (TestResult failedTest : failedTests) {
-            testResultBuilder
-                    .append(String.format("<strong>%s</strong>%n", failedTest.getFullName()));
+    private String formatFailedTests(final List<? extends TestResult> failedTests) {
+        final StringBuilder testResultBuilder = new StringBuilder();
+        for (final TestResult failedTest : failedTests) {
+            testResultBuilder.append(String.format("<strong>%s</strong>%n", failedTest.getFullName()));
 
             if (StringUtils.isNotBlank(failedTest.getErrorDetails())) {
                 testResultBuilder.append(failedTest.getErrorDetails());
@@ -213,10 +206,10 @@ public class OpsGenieNotificationService {
     }
 
     private String formatBuildVariables() {
-        StringBuilder buildVariablesBuilder = new StringBuilder();
+        final StringBuilder buildVariablesBuilder = new StringBuilder();
         if (build instanceof AbstractBuild) {
-            Map<String, String> buildVariables = ((AbstractBuild<?, ?>) build).getBuildVariables();
-            for (Map.Entry<String, String> entry : buildVariables.entrySet()) {
+            final Map<String, String> buildVariables = ((AbstractBuild<?, ?>) build).getBuildVariables();
+            for (final Map.Entry<String, String> entry : buildVariables.entrySet()) {
                 buildVariablesBuilder.append(entry.getKey()).append(" -> ").append(entry.getValue()).append("\n");
             }
         }
@@ -224,120 +217,125 @@ public class OpsGenieNotificationService {
     }
 
     public boolean sendAfterBuildData() {
+        Map details = new HashMap();
         populateRequestPayloadWithMandatoryFields();
 
         if (build instanceof AbstractBuild) {
             if (build.getResult() == Result.FAILURE || build.getResult() == Result.UNSTABLE) {
-                Set<User> culprits = ((AbstractBuild<?, ?>) build).getCulprits();
+                final Set<User> culprits = ((AbstractBuild<?, ?>) build).getCulprits();
                 if (!culprits.isEmpty()) {
-                    requestPayload.put("culprits", formatCulprits(culprits));
+                    details.put("culprits", formatCulprits(culprits));
                 }
             }
         }
 
-        StringBuilder descriptionBuilder = new StringBuilder();
-        AbstractTestResultAction<?> testResult = build.getAction(AbstractTestResultAction.class);
+        final StringBuilder descriptionBuilder = new StringBuilder();
+        final AbstractTestResultAction<?> testResult = build.getAction(AbstractTestResultAction.class);
         if (testResult != null) {
-            String passedTestCount = Integer.toString(testResult.getTotalCount() - testResult.getFailCount() - testResult.getSkipCount());
-            requestPayload.put("passedTestCount", passedTestCount);
-            String failedTestCount = Integer.toString(testResult.getFailCount());
-            requestPayload.put("failedTestCount", failedTestCount);
-            String skippedTestCount = Integer.toString(testResult.getSkipCount());
-            requestPayload.put("skippedTestCount", skippedTestCount);
+            final String passedTestCount = Integer
+                    .toString(testResult.getTotalCount() - testResult.getFailCount() - testResult.getSkipCount());
+            details.put("passedTestCount", passedTestCount);
+            final String failedTestCount = Integer.toString(testResult.getFailCount());
+            details.put("failedTestCount", failedTestCount);
+            final String skippedTestCount = Integer.toString(testResult.getSkipCount());
+            details.put("skippedTestCount", skippedTestCount);
 
             if (build.getResult() == Result.UNSTABLE || build.getResult() == Result.FAILURE) {
                 descriptionBuilder.append(formatFailedTests(testResult.getFailedTests()));
-                requestPayload.put("failedTests", descriptionBuilder);
+                details.put("failedTests", descriptionBuilder);
             }
         }
 
         if (build instanceof AbstractBuild) {
-            requestPayload.put("commitList", formatCommitList(((AbstractBuild<?, ?>) build).getChangeSet()));
+            details.put("commitList", formatCommitList(((AbstractBuild<?, ?>) build).getChangeSet()));
         }
-        Run<?, ?> previousBuild = build.getPreviousBuild();
+        final Run<?, ?> previousBuild = build.getPreviousBuild();
         if (previousBuild != null) {
-            String previousDisplayName = previousBuild.getDisplayName();
-            requestPayload.put("previousDisplayName", previousDisplayName);
-            String previousTime = previousBuild.getTimestamp().getTime().toString();
-            requestPayload.put("previousTime", previousTime);
-            Result previousResult = previousBuild.getResult();
+            final String previousDisplayName = previousBuild.getDisplayName();
+            details.put("previousDisplayName", previousDisplayName);
+            final String previousTime = previousBuild.getTimestamp().getTime().toString();
+            details.put("previousTime", previousTime);
+            final Result previousResult = previousBuild.getResult();
             if (previousResult != null) {
-                requestPayload.put("previousStatus", previousResult.toString());
+                details.put("previousStatus", previousResult.toString());
             }
-            Job<?, ?> previousProject = previousBuild.getParent();
+            final Job<?, ?> previousProject = previousBuild.getParent();
             if (previousProject != null) {
-                String previousProjectName = previousProject.getName();
-                requestPayload.put("previousProjectName", previousProjectName);
+                final String previousProjectName = previousProject.getName();
+                details.put("previousProjectName", previousProjectName);
             }
         }
 
-        requestPayload.put("isPreBuild", "false");
-        requestPayload.put("duration", build.getDurationString());
-        requestPayload.put("params", formatBuildVariables());
+        details.put("isPreBuild", "false");
+        details.put("duration", build.getDurationString());
+        details.put("params", formatBuildVariables());
 
-        if(alertProperties.getPriority() != null) {
+        if (alertProperties.getPriority() != null) {
             requestPayload.put("priority", alertProperties.getPriority().getValue());
         }
+
+        requestPayload.put("details", details);
 
         String payload = "";
         try {
             payload = this.mapper.writerWithDefaultPrettyPrinter().writeValueAsString(requestPayload);
-        } catch (Exception e) {
+        } catch (final Exception e) {
             e.printStackTrace(consoleOutputLogger);
             logger.error("Exception while serializing post request :" + e.getMessage());
         }
 
-        String response = sendWebhookToOpsGenie(payload);
+        final String response = sendWebhookToOpsGenie(payload);
         return checkResponse(response);
     }
 
-
-    private String formatCulprits(Set<User> culprits) {
-        StringBuilder culpritsBuilder = new StringBuilder();
-        for (User culprit : culprits) {
+    private String formatCulprits(final Set<User> culprits) {
+        final StringBuilder culpritsBuilder = new StringBuilder();
+        for (final User culprit : culprits) {
             culpritsBuilder.append(culprit.getFullName()).append(",");
         }
         return culpritsBuilder.toString();
     }
 
     private void populateRequestPayloadWithMandatoryFields() {
-        String time = Objects.toString(build.getTimestamp().getTime());
-        requestPayload.put("time", time);
 
-        String projectName = project.getName();
-        requestPayload.put("projectName", projectName);
-
+        String description = "";
         String displayName = build.getDisplayName();
-        requestPayload.put("displayName", displayName);
+        final String projectName = project.getName();
+        description += "Job: " + projectName + "\n";
+        description += "JobNumber: " + displayName + "\n";
 
         Result status = build.getResult();
         if (status == null) {
             // Build may still be ongoing
             status = Result.SUCCESS;
         }
-        requestPayload.put("status", Objects.toString(status));
+        description += "Status: " + Objects.toString(status) + "\n";
 
-        String url = build.getUrl();
-        requestPayload.put("url", new JenkinsLocationConfiguration().getUrl() + url);
+        final String url = build.getUrl();
+        final String jenkinsSite = new JenkinsLocationConfiguration().getUrl();
+        final String fullJenkinsURL = jenkinsSite + url;
+        requestPayload.put("source", fullJenkinsURL);
 
         List<String> tags = splitStringWithComma(alertProperties.getTags());
+        tags.add("jenkins");
+        tags.add(Objects.toString(status));
         requestPayload.put("tags", tags);
 
-        List<String> teams = splitStringWithComma(alertProperties.getTeams());
-        requestPayload.put("teams", teams);
-
-        String startTime = Objects.toString(build.getStartTimeInMillis());
-        requestPayload.put("startTimeInMillis", startTime);
+        // List<String> teams = splitStringWithComma(alertProperties.getTeams());
+        // requestPayload.put("teams", teams);
+        requestPayload.put("message", "Project: " + projectName + " Status: " + Objects.toString(status));
+        requestPayload.put("description", description);
+        requestPayload.put("alias", "Project: " + projectName + " Status: " + Objects.toString(status));
     }
 
-    private List<String> splitStringWithComma(String unparsed) {
+    private List<String> splitStringWithComma(final String unparsed) {
         if (unparsed == null) {
             return Collections.emptyList();
         }
 
-        ArrayList<String> tokens = new ArrayList<>();
+        final ArrayList<String> tokens = new ArrayList<>();
 
-        for (String token : unparsed.trim().split(",")) {
+        for (final String token : unparsed.trim().split(",")) {
             tokens.add(token.trim());
         }
 
@@ -354,7 +352,7 @@ public class OpsGenieNotificationService {
             return error;
         }
 
-        public void setError(String error) {
+        public void setError(final String error) {
             this.error = error;
         }
     }
